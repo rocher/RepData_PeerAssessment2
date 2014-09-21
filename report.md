@@ -1,0 +1,638 @@
+# Storms: Health and Economic Impacts
+September 2014  
+
+<br>
+
+## Synopsis
+
+This report explores the social and economic impact of storm events since 1996 to
+2011 across USA.
+
+Starting with data from NOAA storm database, there is a deep data
+clean process to adjust data and events to the description in the codebook. It
+has been a hard work to complete this part because raw data contains lot of
+coding errors that are outside the codebook. Moreover, data used has been
+filtered between 1996 and 2011: previous data is incomplete and even more error prone.
+
+The report concludes with the top 10 events that are most harmful with respect
+to population, both fatalities and injuries, and with respect to economic impact.
+Surprisingly, the event that causes more fatalities is *excessive heat*.
+
+<br>
+
+## Data Processing
+
+This section contains all preliminar data processing. It consist mainly in the
+filtering, cleaning and management of raw data to get a *tidy data set*.
+
+Libraries used during this process, and later, are:
+
+
+```r
+library(ggplot2)
+library(plyr)
+library(stringr)
+```
+
+<br>
+
+### Downloading Data
+
+First at all, data can be downloaded from the following URL:
+
+
+```r
+if(! file.exists("StormData.csv.bz2")) {
+    url <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+    download.file(url, destfile="StormData.csv.bz2", method="curl")
+}
+```
+
+<br>
+
+### Reading data
+
+We first begin by reading the complete *raw* data set:
+
+
+```r
+StormData.raw <- read.csv("StormData.csv.bz2", header=TRUE)
+```
+
+<br>
+
+### Filtering by year
+
+According to the
+[NOAA description of Storm Events Database Contents](http://www.ncdc.noaa.gov/stormevents/details.jsp), 
+it is since 1996 that all storms events are stored in the database. We will use
+storm data recorded since 1996 to address our report.  Before 1996 only *few part*
+of stroms were reported. We are interested in all kind of storms, so taking a long
+period of time without complete data is not a good point.
+
+The raw data set filtered by year:
+
+
+```r
+StormData.raw.1996_1999 <- grep("19[9][6-9]", StormData.raw$BGN_DATE)
+StormData.raw.2000_ <- grep("20[0-9][0-9]", StormData.raw$BGN_DATE)
+StormData.raw <- StormData.raw[c(StormData.raw.1996_1999, StormData.raw.2000_),]
+```
+
+### Removing rows without interest
+
+To address the questions about the most harmful events with respect population
+and economic consequences, we will use only those events where `FATALITIES`,
+`INJURIES`, `PROPDMG` or `CROPDMG` contain information (are positive).
+
+The rest of the events are useless for the purpose of this report:
+
+
+```r
+StormData.raw <- subset(StormData.raw, FATALITIES>0 | INJURIES>0 | PROPDMG>0 | CROPDMG>0)
+```
+
+### Cleaning **EVTYPE** column
+
+This column needs severe cleaning. In the current data set we have at this
+stage, column `EVTYPE` contains 0 different values.
+
+We start by doing a *first normalization of strings*, which consists in removing
+of starting and trailing spaces and converting them to lowercase:
+
+
+```r
+StormData.raw$EVTYPE <- str_trim(tolower(StormData.raw$EVTYPE))
+```
+
+Factors in this column are larger than the 48 values specified in the codebook.
+
+
+```r
+EVTYPE.raw <- sort(unique(StormData.raw$EVTYPE))
+length(EVTYPE.raw)
+```
+
+```
+## [1] 180
+```
+
+For example, in the first 20 values shown here there are values not considered
+in the codebook:
+
+
+```r
+head(EVTYPE.raw, n=20)
+```
+
+```
+##  [1] "agricultural freeze"       "astronomical high tide"   
+##  [3] "avalanche"                 "beach erosion"            
+##  [5] "black ice"                 "blizzard"                 
+##  [7] "blowing dust"              "blowing snow"             
+##  [9] "brush fire"                "coastal erosion"          
+## [11] "coastal flood"             "coastal flooding"         
+## [13] "coastal  flooding/erosion" "coastal flooding/erosion" 
+## [15] "coastalstorm"              "coastal storm"            
+## [17] "cold"                      "cold and snow"            
+## [19] "cold temperature"          "cold weather"
+```
+
+Even more, there is a curious value `other` to specify accidents. For example:
+
+
+```r
+as.character(StormData.raw[StormData.raw$EVTYPE=="other", "REMARKS"][1])
+```
+
+```
+## [1] "After 3 months of drought, snows finally came...followed by avalanches and then flooding.  A record one week snow dumped 132.9 inches on the city of Valdez.  Next, avalanches cut off the Richardson Highway for most of the weekend while another avalanche swept over a local home.  When temperatures soared into the upper 30s Saturday, city streets began to flood.  The Public Works Department spent $30,000.00 in overtime during this week - about half the total overtime budget for the season."
+```
+
+From this event *REMARKS* the final *EVENT* could be *drought*, *heavy snow*,
+*avalanche*, *flood*, *excessive heat* or *flash flood*. Futhermore, the event
+could be split into several events occurring in different places: heavy snow in
+the city of Valdez, one avalanche in the Richardson Highway and another one in
+a local home, and finally a flood in the city streets (Valdez?).
+
+There are 34 rows
+with this *EVTYPE* value, with vague descriptions or with multipe events.
+We will ignore these events. This leads a number of *EVTYPE* values of:
+
+
+```r
+StormData.raw <- subset(StormData.raw, EVTYPE!="other")
+EVTYPE.raw <- sort(unique(StormData.raw$EVTYPE))
+length(EVTYPE.raw)
+```
+
+```
+## [1] 179
+```
+
+To clean `EVTYPE` column we create a new column `EVENT` that maps current
+*EVTYPE* values into valid *EVENT* values. The map has been elaborated manually,
+exploring each one of the 179 *EVTYPE* values and assigning the most likely *EVENT*
+value.
+
+This is the table used to map current *EVTYPE* values to **EVENT** values:
+
+<pre style="font-size:11px;line-height:1.0em">
+| EVTYPE                    | EVENT                    |    | EVTYPE                    | EVENT                    |
+|---------------------------+--------------------------|    |---------------------------+--------------------------|
+| agricultural freeze       | frost/freeze             |    | lake effect snow          | lake-effect snow         |
+| astronomical high tide    | storm surge/tide         |    | lake-effect snow          | lake-effect snow         |
+| avalanche                 | avalanche                |    | lakeshore flood           | lakeshore flood          |
+| beach erosion             | coastal flood            |    | landslide                 | debris flow              |
+| black ice                 | ice storm                |    | landslides                | debris flow              |
+| blizzard                  | blizzard                 |    | landslump                 | debris flow              |
+| blowing dust              | dust devil               |    | landspout                 | debris flow              |
+| blowing snow              | ice storm                |    | late season snow          | winter weather           |
+| brush fire                | wildfire                 |    | light freezing rain       | freezing fog             |
+| coastal  flooding/erosion | coastal flood            |    | light snow                | heavy snow               |
+| coastal erosion           | coastal flood            |    | light snowfall            | heavy snow               |
+| coastal flood             | coastal flood            |    | lightning                 | lightning                |
+| coastal flooding          | coastal flood            |    | marine accident           | marine high wind         |
+| coastal flooding/erosion  | coastal flood            |    | marine high wind          | marine high wind         |
+| coastal storm             | marine thunderstorm wind |    | marine strong wind        | marine strong wind       |
+| coastalstorm              | marine thunderstorm wind |    | marine thunderstorm wind  | marine thunderstorm wind |
+| cold                      | cold/wind chill          |    | marine tstm wind          | marine thunderstorm wind |
+| cold and snow             | cold/wind chill          |    | microburst                | blizzard                 |
+| cold temperature          | cold/wind chill          |    | mixed precip              | sleet                    |
+| cold weather              | cold/wind chill          |    | mixed precipitation       | heavy rain               |
+| cold/wind chill           | cold/wind chill          |    | mud slide                 | debris flow              |
+| dam break                 | flash flood              |    | mudslide                  | debris flow              |
+| damaging freeze           | frost/freeze             |    | mudslides                 | debris flow              |
+| dense fog                 | dense fog                |    | non tstm wind             | high wind                |
+| downburst                 | thunderstorm wind        |    | non-severe wind damage    | high wind                |
+| drought                   | drought                  |    | non-tstm wind             | high wind                |
+| drowning                  | heavy rain               |    | rain                      | heavy rain               |
+| dry microburst            | drought                  |    | rain/snow                 | sleet                    |
+| dust devil                | dust devil               |    | record heat               | excessive heat           |
+| dust storm                | dust storm               |    | rip current               | flood                    |
+| early frost               | frost/freeze             |    | rip currents              | flood                    |
+| erosion/cstl flood        | coastal flood            |    | river flood               | flood                    |
+| excessive heat            | excessive heat           |    | river flooding            | flood                    |
+| excessive snow            | heavy snow               |    | rock slide                | debris flow              |
+| extended cold             | extreme cold/wind chill  |    | rogue wave                | high surf                |
+| extreme cold              | extreme cold/wind chill  |    | rough seas                | high surf                |
+| extreme cold/wind chill   | extreme cold/wind chill  |    | rough surf                | high surf                |
+| extreme windchill         | extreme cold/wind chill  |    | seiche                    | seiche                   |
+| falling snow/ice          | heavy snow               |    | small hail                | hail                     |
+| flash flood               | flash flood              |    | snow                      | heavy snow               |
+| flash flood/flood         | flash flood              |    | snow and ice              | ice storm                |
+| flood                     | flood                    |    | snow squall               | heavy snow               |
+| flood/flash/flood         | flash flood              |    | snow squalls              | heavy snow               |
+| fog                       | dense fog                |    | storm surge               | storm surge/tide         |
+| freeze                    | frost/freeze             |    | storm surge/tide          | storm surge/tide         |
+| freezing drizzle          | frost/freeze             |    | strong wind               | strong wind              |
+| freezing fog              | freezing fog             |    | strong winds              | strong wind              |
+| freezing rain             | winter strom             |    | thunderstorm              | thunderstorm wind        |
+| freezing spray            | freezing fog             |    | thunderstorm wind         | thunderstorm wind        |
+| frost                     | frost/freeze             |    | thunderstorm wind (g40)   | thunderstorm wind        |
+| frost/freeze              | frost/freeze             |    | tidal flooding            | coastal flood            |
+| funnel cloud              | funnel cloud             |    | tornado                   | tornado                  |
+| glaze                     | frost/freeze             |    | torrential rainfall       | heavy rain               |
+| gradient wind             | strong wind              |    | tropical depression       | tropical depression      |
+| gusty wind                | high wind                |    | tropical storm            | tropical storm           |
+| gusty wind/hail           | thunderstorm wind        |    | tstm wind                 | thunderstorm wind        |
+| gusty wind/hvy rain       | high wind                |    | tstm wind  (g45)          | thunderstorm wind        |
+| gusty wind/rain           | thunderstorm wind        |    | tstm wind (41)            | thunderstorm wind        |
+| gusty winds               | high wind                |    | tstm wind (g35)           | thunderstorm wind        |
+| hail                      | hail                     |    | tstm wind (g40)           | thunderstorm wind        |
+| hard freeze               | ice storm                |    | tstm wind (g45)           | thunderstorm wind        |
+| hazardous surf            | high surf                |    | tstm wind 40              | thunderstorm wind        |
+| heat                      | heat                     |    | tstm wind 45              | thunderstorm wind        |
+| heat wave                 | heat                     |    | tstm wind and lightning   | thunderstorm wind        |
+| heavy rain                | heavy rain               |    | tstm wind g45             | thunderstorm wind        |
+| heavy rain/high surf      | heavy rain               |    | tstm wind/hail            | thunderstorm wind        |
+| heavy seas                | high surf                |    | tsunami                   | tsunami                  |
+| heavy snow                | heavy snow               |    | typhoon                   | typhoon                  |
+| heavy snow shower         | heavy snow               |    | unseasonable cold         | extrem cold/wind chill   |
+| heavy surf                | high surf                |    | unseasonably cold         | extrem cold/wind chill   |
+| heavy surf and wind       | high surf                |    | unseasonably warm         | excessive heat           |
+| heavy surf/high surf      | high surf                |    | unseasonal rain           | heavy rain               |
+| high seas                 | high surf                |    | urban/sml stream fld      | flood                    |
+| high surf                 | high surf                |    | volcanic ash              | volcanic ash             |
+| high surf advisory        | high surf                |    | warm weather              | excessive heat           |
+| high swells               | high surf                |    | waterspout                | waterspout               |
+| high water                | high surf                |    | wet microburst            | waterspout               |
+| high wind                 | high wind                |    | whirlwind                 | funnel cloud             |
+| high wind (g40)           | high wind                |    | wild/forest fire          | wildfire                 |
+| high winds                | high wind                |    | wildfire                  | wildfire                 |
+| hurricane                 | hurricane (typhoon)      |    | wind                      | high wind                |
+| hurricane edouard         | hurricane (typhoon)      |    | wind and wave             | high wind                |
+| hurricane/typhoon         | hurricane (typhoon)      |    | wind damage               | strong wind              |
+| hyperthermia/exposure     | excessive heat           |    | winds                     | high wind                |
+| hypothermia/exposure      | heavy snow               |    | winter storm              | winter storm             |
+| ice jam flood (minor      | flood                    |    | winter weather            | winter weather           |
+| ice on road               | ice storm                |    | winter weather mix        | winter weather           |
+| ice roads                 | ice storm                |    | winter weather/mix        | winter weather           |
+| ice storm                 | ice storm                |    | wintry mix                | winter weather           |
+| icy roads                 | ice storm                |    '---------------------------+--------------------------'
+'---------------------------+--------------------------'
+</pre>
+
+From this table, the map is:
+
+
+```r
+EVTYPEmap <- data.frame(
+
+    EVTYPE=c("agricultural freeze", "astronomical high tide", "avalanche", "beach erosion", "black ice", "blizzard",
+             "blowing dust", "blowing snow", "brush fire", "coastal  flooding/erosion", "coastal erosion",
+             "coastal flood", "coastal flooding", "coastal flooding/erosion", "coastal storm", "coastalstorm",
+             "cold", "cold and snow", "cold temperature", "cold weather", "cold/wind chill", "dam break",
+             "damaging freeze", "dense fog", "downburst", "drought", "drowning", "dry microburst", "dust devil",
+             "dust storm", "early frost", "erosion/cstl flood", "excessive heat", "excessive snow", "extended cold",
+             "extreme cold", "extreme cold/wind chill", "extreme windchill", "falling snow/ice", "flash flood",
+             "flash flood/flood", "flood", "flood/flash/flood", "fog", "freeze", "freezing drizzle", "freezing fog",
+             "freezing rain", "freezing spray", "frost", "frost/freeze", "funnel cloud", "glaze", "gradient wind",
+             "gusty wind", "gusty wind/hail", "gusty wind/hvy rain", "gusty wind/rain", "gusty winds", "hail",
+             "hard freeze", "hazardous surf", "heat", "heat wave", "heavy rain", "heavy rain/high surf",
+             "heavy seas", "heavy snow", "heavy snow shower", "heavy surf", "heavy surf and wind",
+             "heavy surf/high surf", "high seas", "high surf", "high surf advisory", "high swells", "high water",
+             "high wind", "high wind (g40)", "high winds", "hurricane", "hurricane edouard", "hurricane/typhoon",
+             "hyperthermia/exposure", "hypothermia/exposure", "ice jam flood (minor", "ice on road", "ice roads",
+             "ice storm", "icy roads", "lake effect snow", "lake-effect snow", "lakeshore flood", "landslide",
+             "landslides", "landslump", "landspout", "late season snow", "light freezing rain", "light snow",
+             "light snowfall", "lightning", "marine accident", "marine high wind", "marine strong wind",
+             "marine thunderstorm wind", "marine tstm wind", "microburst", "mixed precip", "mixed precipitation",
+             "mud slide", "mudslide", "mudslides", "non tstm wind", "non-severe wind damage", "non-tstm wind",
+             "rain", "rain/snow", "record heat", "rip current", "rip currents", "river flood", "river flooding",
+             "rock slide", "rogue wave", "rough seas", "rough surf", "seiche", "small hail", "snow", "snow and ice",
+             "snow squall", "snow squalls", "storm surge", "storm surge/tide", "strong wind", "strong winds",
+             "thunderstorm", "thunderstorm wind", "thunderstorm wind (g40)", "tidal flooding", "tornado",
+             "torrential rainfall", "tropical depression", "tropical storm", "tstm wind", "tstm wind  (g45)",
+             "tstm wind (41)", "tstm wind (g35)", "tstm wind (g40)", "tstm wind (g45)", "tstm wind 40",
+             "tstm wind 45", "tstm wind and lightning", "tstm wind g45", "tstm wind/hail", "tsunami", "typhoon",
+             "unseasonable cold", "unseasonably cold", "unseasonably warm", "unseasonal rain",
+             "urban/sml stream fld", "volcanic ash", "warm weather", "waterspout", "wet microburst", "whirlwind",
+             "wild/forest fire", "wildfire", "wind", "wind and wave", "wind damage", "winds", "winter storm",
+             "winter weather", "winter weather mix", "winter weather/mix", "wintry mix"),
+
+    EVENT=c("frost/freeze", "storm surge/tide", "avalanche", "coastal flood", "ice storm", "blizzard", "dust devil",
+             "ice storm", "wildfire", "coastal flood", "coastal flood", "coastal flood", "coastal flood",
+             "coastal flood", "marine thunderstorm wind", "marine thunderstorm wind", "cold/wind chill",
+             "cold/wind chill", "cold/wind chill", "cold/wind chill", "cold/wind chill", "flash flood",
+             "frost/freeze", "dense fog", "thunderstorm wind", "drought", "heavy rain", "drought", "dust devil",
+             "dust storm", "frost/freeze", "coastal flood", "excessive heat", "heavy snow",
+             "extreme cold/wind chill", "extreme cold/wind chill", "extreme cold/wind chill",
+             "extreme cold/wind chill", "heavy snow", "flash flood", "flash flood", "flood", "flash flood",
+             "dense fog", "frost/freeze", "frost/freeze", "freezing fog", "winter strom", "freezing fog",
+             "frost/freeze", "frost/freeze", "funnel cloud", "frost/freeze", "strong wind", "high wind",
+             "thunderstorm wind", "high wind", "thunderstorm wind", "high wind", "hail", "ice storm", "high surf",
+             "heat", "heat", "heavy rain", "heavy rain", "high surf", "heavy snow", "heavy snow", "high surf",
+             "high surf", "high surf", "high surf", "high surf", "high surf", "high surf", "high surf", "high wind",
+             "high wind", "high wind", "hurricane (typhoon)", "hurricane (typhoon)", "hurricane (typhoon)",
+             "excessive heat", "heavy snow", "flood", "ice storm", "ice storm", "ice storm", "ice storm",
+             "lake-effect snow", "lake-effect snow", "lakeshore flood", "debris flow", "debris flow", "debris flow",
+             "debris flow", "winter weather", "freezing fog", "heavy snow", "heavy snow", "lightning",
+             "marine high wind", "marine high wind", "marine strong wind", "marine thunderstorm wind",
+             "marine thunderstorm wind", "blizzard", "sleet", "heavy rain", "debris flow", "debris flow",
+             "debris flow", "high wind", "high wind", "high wind", "heavy rain", "sleet", "excessive heat", "flood",
+             "flood", "flood", "flood", "debris flow", "high surf", "high surf", "high surf", "seiche", "hail",
+             "heavy snow", "ice storm", "heavy snow", "heavy snow", "storm surge/tide", "storm surge/tide",
+             "strong wind", "strong wind", "thunderstorm wind", "thunderstorm wind", "thunderstorm wind",
+             "coastal flood", "tornado", "heavy rain", "tropical depression", "tropical storm", "thunderstorm wind",
+             "thunderstorm wind", "thunderstorm wind", "thunderstorm wind", "thunderstorm wind",
+             "thunderstorm wind", "thunderstorm wind", "thunderstorm wind", "thunderstorm wind",
+             "thunderstorm wind", "thunderstorm wind", "tsunami", "typhoon", "extrem cold/wind chill",
+             "extrem cold/wind chill", "excessive heat", "heavy rain", "flood", "volcanic ash", "excessive heat",
+             "waterspout", "waterspout", "funnel cloud", "wildfire", "wildfire", "high wind", "high wind",
+             "strong wind", "high wind", "winter storm", "winter weather", "winter weather", "winter weather",
+             "winter weather")
+
+ )
+```
+
+We can create the new column `EVENT` by mergin *StormData.raw* and *EVTYPEmap*
+including all rows in *StormData.raw*:
+
+
+```r
+StormData.raw <- merge(StormData.raw, EVTYPEmap, all.x=TRUE)
+```
+
+Now `EVENT` column contains only valid values:
+
+
+```r
+length(unique(StormData.raw$EVENT))
+```
+
+```
+## [1] 47
+```
+
+The only value not assigned is *astronomical low tide*: no *EVTYPE* value has
+been found that could match this value.
+
+<br>
+
+### Preparing data for health analysis
+
+Only a subset of the current `StormData.raw` is needed to address health impact:
+
+
+```r
+Storm.health <- subset(StormData.raw, FATALITIES>0 | INJURIES>0,
+                       c("EVENT", "FATALITIES", "INJURIES"))
+```
+
+<br>
+
+### Preparing data for economic analysis
+
+The same occurs with economic impact:
+
+
+```r
+Storm.economy <- subset(StormData.raw, PROPDMG>0 | CROPDMG>0,
+                        c("EVENT", "PROPDMG", "PROPDMGEXP", "CROPDMG", "CROPDMGEXP"))
+```
+
+In the case of economic analysis we need to convert columns `PROPDMG` and `CROPDMG`
+to valid values depending on the 10th power in the corresponding columns
+`PROPDMGEXP` and `CROPDMGEXP`. We first *normalize strings* in these columns as
+a cleanup procedure:
+
+
+```r
+Storm.economy$PROPDMGEXP <- str_trim(tolower(Storm.economy$PROPDMGEXP))
+Storm.economy$CROPDMGEXP <- str_trim(tolower(Storm.economy$CROPDMGEXP))
+```
+
+The cleanup is finished. Magnitude indicators are correctly set:
+
+
+```r
+unique(Storm.economy$PROPDMGEXP)
+```
+
+```
+## [1] ""  "k" "m" "b"
+```
+
+```r
+unique(Storm.economy$CROPDMGEXP)
+```
+
+```
+## [1] "m" ""  "k"
+```
+
+The conversion of columns `PROPDMG` and `CROPDMG` to integer values is as
+follows:
+
+
+```r
+power10 <- data.frame(factor=c("", "k", "m", "b"),
+                      magnitude=c(1, 1000, 1000000, 1000000000))
+
+Storm.economy <- merge(x=Storm.economy, y=power10,
+                       by.x=as.factor("PROPDMGEXP"), by.y="factor",
+                       all.x=TRUE, sort=FALSE)
+colnames(Storm.economy)[6] <- "magnitude.prop"
+Storm.economy$PROPDMG <- Storm.economy$PROPDMG * Storm.economy$magnitude.prop
+
+Storm.economy <- merge(x=Storm.economy, y=power10,
+                       by.x=as.factor("CROPDMGEXP"), by.y="factor",
+                       all.x=TRUE, sort=FALSE)
+colnames(Storm.economy)[7] <- "magnitude.crop"
+Storm.economy$CROPDMG <- Storm.economy$CROPDMG * Storm.economy$magnitude.crop
+```
+
+<br>
+
+At this point we have a **tidy data set** to start the analysis of health and
+economic impacts of storm events.
+
+<br>
+
+## Data Analysis
+
+Analysis made on the tidy data set is quite obvious: data aggregation on a given
+aspect will show the total impact of each event.
+
+### Health Impact
+
+We consider of crucial importance to separate *fatalities* from *injuries*:
+
+
+```r
+fatalities <- aggregate(Storm.health$FATALITIES, by=list(Storm.health$EVENT), FUN=sum)
+names(fatalities) <- c("EVENT", "total")
+head(fatalities)
+```
+
+```
+##             EVENT total
+## 1       avalanche   149
+## 2        blizzard    63
+## 3   coastal flood     4
+## 4 cold/wind chill    83
+## 5     debris flow    26
+## 6       dense fog    66
+```
+
+```r
+injuries <- aggregate(Storm.health$INJURIES, by=list(Storm.health$EVENT), FUN=sum)
+names(injuries) <- c("EVENT", "total")
+head(injuries)
+```
+
+```
+##             EVENT total
+## 1       avalanche   105
+## 2        blizzard   382
+## 3   coastal flood    12
+## 4 cold/wind chill    14
+## 5     debris flow    30
+## 6       dense fog   800
+```
+
+### Economic Impact
+
+Conversely, economic impact can be aggregated without separation between property
+and crop damage, that should be made on a more focused report. The aggregation
+made below makes also a *normalization of totals* to express them as milions of
+dollars:
+
+
+```r
+Storm.economy$total <- (Storm.economy$PROPDMG + Storm.economy$CROPDMG)/1000000
+economy <- aggregate(Storm.economy$total, by=list(Storm.economy$EVENT), FUN=sum)
+names(economy) <- c("EVENT", "total")
+head(economy)
+```
+
+```
+##             EVENT   total
+## 1       avalanche   1.533
+## 2        blizzard 487.353
+## 3   coastal flood 243.457
+## 4 cold/wind chill   2.553
+## 5     debris flow  78.839
+## 6       dense fog  17.547
+```
+
+<br>
+
+## Results
+
+Once the data analysis has been concluded it's time to present final results. The 
+result is presented as the top ten events of each impact.
+
+<br>
+
+### Health impact
+
+#### Fatalities
+
+Top ten events that are most harmful with respect to population, resulting in
+fatalities:
+
+
+```r
+fatalities.top10 <- arrange(fatalities, desc(total))[1:10, ]
+fatalities.top10
+```
+
+```
+##                      EVENT total
+## 1           excessive heat  1393
+## 2                  tornado  1175
+## 3                    flood   700
+## 4              flash flood   642
+## 5                lightning   464
+## 6        thunderstorm wind   290
+## 7                high wind   219
+## 8  extreme cold/wind chill   178
+## 9             winter storm   163
+## 10               avalanche   149
+```
+
+```r
+ggplot(fatalities.top10, aes(x=reorder(EVENT, total), y=total)) +
+    geom_bar(colour="white", fill="red2", stat="identity") +
+    xlab("EVENT") +
+    ylab("POPULATION IMPACT - Fatalities") +
+    coord_flip()
+```
+
+![plot of chunk result-fatalities](./report_files/figure-html/result-fatalities.png) 
+
+<br>
+
+#### Injuries
+
+Top ten events that are most harmful with respect to population, resulting in
+injuries:
+
+
+```r
+injuries.top10 <- arrange(injuries, desc(total))[1:10, ]
+injuries.top10
+```
+
+```
+##                  EVENT total
+## 1              tornado 16392
+## 2                flood  7198
+## 3       excessive heat  4440
+## 4    thunderstorm wind  4008
+## 5            lightning  3040
+## 6          flash flood  1536
+## 7         winter storm  1219
+## 8  hurricane (typhoon)  1192
+## 9            high wind  1010
+## 10            wildfire   999
+```
+
+```r
+ggplot(injuries.top10, aes(x=reorder(EVENT, total), y=total)) +
+    geom_bar(colour="white", fill="orange2", stat="identity") +
+    xlab("EVENT") +
+    ylab("POPULATION IMPACT - Injuries") +
+    coord_flip()
+```
+
+![plot of chunk result-injuries](./report_files/figure-html/result-injuries.png) 
+
+<br>
+
+### Economic impact
+
+Top ten events that are most harmful with respect to economic impact, both
+crops and properties:
+
+
+```r
+economy.top10 <- arrange(economy, desc(total))[1:10, ]
+economy.top10
+```
+
+```
+##                  EVENT total
+## 1  hurricane (typhoon) 32042
+## 2                flood 26434
+## 3              tornado 19921
+## 4                 hail 12194
+## 5          flash flood 10780
+## 6              drought 10139
+## 7       tropical storm  7726
+## 8             wildfire  6394
+## 9    thunderstorm wind  5058
+## 10           high wind  4505
+```
+
+```r
+ggplot(economy.top10, aes(x=reorder(EVENT, total), y=total)) +
+    geom_bar(colour="white", fill="green4", stat="identity") +
+    xlab("EVENT") +
+    ylab("ECONOMIC IMPACT  (Millions of dollars)") +
+    coord_flip()
+```
+
+![plot of chunk result-economy](./report_files/figure-html/result-economy.png) 
